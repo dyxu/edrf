@@ -7,7 +7,9 @@ import (
 )
 
 type EDRF interface {
-	Solve() ([]Task, error)
+	Assign() (Task, error)
+	AddTask(t Task) error
+	RemoveTask(t Task) error
 	Describe() string
 }
 
@@ -44,6 +46,7 @@ const (
 
 var (
 	ErrEmptyTaskQueue = errors.New("empty task queue")
+	ErrExistTask      = errors.New("exist task")
 )
 
 type taskWrap struct {
@@ -56,7 +59,7 @@ type taskWrap struct {
 	mu        sync.Mutex
 }
 
-func newTaskWrap(task Task, index int) *taskWrap {
+func newTaskWrap(task Task) *taskWrap {
 	w := &taskWrap{
 		Task:      task,
 		allocated: Resources{},
@@ -77,7 +80,8 @@ type taskQueue []*taskWrap
 
 type eDRF struct {
 	cluster   Cluster
-	tasks     taskQueue
+	tasks     map[string]*taskWrap
+	queue     taskQueue
 	allocated Resources
 	binpack   BinpackOption
 	mu        sync.Mutex
@@ -86,7 +90,8 @@ type eDRF struct {
 func New(cluster Cluster, tasks ...Task) EDRF {
 	e := &eDRF{
 		cluster:   cluster,
-		tasks:     []*taskWrap{},
+		tasks:     map[string]*taskWrap{},
+		queue:     []*taskWrap{},
 		allocated: Resources{},
 		mu:        sync.Mutex{},
 	}
@@ -95,46 +100,32 @@ func New(cluster Cluster, tasks ...Task) EDRF {
 		e.binpack = binpack
 	}
 
-	for i, t := range tasks {
-		e.tasks = append(e.tasks, newTaskWrap(t, i))
+	for _, t := range tasks {
+		e.queue.Push(newTaskWrap(t))
 	}
-	heap.Init(&e.tasks)
+	heap.Init(&e.queue)
 
 	return e
 }
 
-func (e *eDRF) Solve() ([]Task, error) {
-	var tasks []Task
-	for {
-		task, err := e.solveOnce()
-		if err != nil {
-			break
-		}
-
-		tasks = append(tasks, task)
-	}
-
-	return tasks, nil
-}
-
-func (e *eDRF) solveOnce() (Task, error) {
+func (e *eDRF) Assign() (Task, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if len(e.tasks) == 0 {
+	if len(e.queue) == 0 {
 		return nil, ErrEmptyTaskQueue
 	}
 
-	t := e.tasks[0]
-	ok := e.tryAllocateFor(t)
+	t := e.queue[0]
+	ok := e.tryAssignTo(t)
 	if ok {
 		e.computeDominantShare(t)
-		heap.Fix(&e.tasks, t.index)
+		heap.Fix(&e.queue, t.index)
 	}
 
 	return t, nil
 }
 
-func (e *eDRF) tryAllocateFor(t *taskWrap) bool {
+func (e *eDRF) tryAssignTo(t *taskWrap) bool {
 	piece := t.Piece()
 	for k := range piece {
 		if e.allocated[k]+piece[k] >= e.cluster.Capacity()[k] {
@@ -168,6 +159,18 @@ func (e *eDRF) computeDominantShare(t *taskWrap) {
 
 func (e *eDRF) Describe() string {
 	return ""
+}
+
+func (e *eDRF) AddTask(t Task) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.tasks[t.Name()]
+	if ok {
+		return ErrExistTask
+	}
+
+	e.queue.Push(newTaskWrap(t))
+	return nil
 }
 
 func (tq taskQueue) Len() int { return len(tq) }
