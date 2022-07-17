@@ -45,10 +45,9 @@ const (
 )
 
 var (
-	ErrEmptyTaskQueue        = errors.New("empty task queue")
-	ErrExistTask             = errors.New("task exists")
-	ErrTaskNotFound          = errors.New("task not found")
-	ErrExhaustionOfResources = errors.New("exhaustion of resources")
+	ErrNoAssignableTask = errors.New("no assignable task")
+	ErrExistTask        = errors.New("task exists")
+	ErrTaskNotFound     = errors.New("task not found")
 )
 
 func DeepCopyResourcesTo(from Resources) Resources {
@@ -90,9 +89,12 @@ func newTaskWrap(task Task) *taskWrap {
 }
 
 func (t *taskWrap) reachLimit() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if t.limit != nil {
 		for k, v := range t.allocated {
-			if t.piece[k]+v >= t.limit.Limit(k) {
+			if t.piece[k]+v > t.limit.Limit(k) {
 				return true
 			}
 		}
@@ -100,12 +102,20 @@ func (t *taskWrap) reachLimit() bool {
 	return false
 }
 
+func (t *taskWrap) incr() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for k, v := range t.piece {
+		t.allocated[k] += v
+	}
+}
+
 type taskQueue []*taskWrap
 
 type eDRF struct {
-	capacity  Resources
 	tasks     map[string]*taskWrap
 	queue     taskQueue
+	capacity  Resources
 	allocated Resources
 	binpack   bool
 	mu        sync.Mutex
@@ -113,10 +123,11 @@ type eDRF struct {
 
 func New(cluster Cluster, tasks ...Task) EDRF {
 	e := &eDRF{
-		capacity:  DeepCopyResourcesTo(cluster.Capacity()),
 		tasks:     map[string]*taskWrap{},
 		queue:     taskQueue{},
+		capacity:  DeepCopyResourcesTo(cluster.Capacity()),
 		allocated: Resources{},
+		binpack:   false,
 		mu:        sync.Mutex{},
 	}
 
@@ -135,39 +146,42 @@ func New(cluster Cluster, tasks ...Task) EDRF {
 }
 
 func (e *eDRF) Assign() (Task, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.queue.Len() == 0 {
-		return nil, ErrEmptyTaskQueue
+	for e.queue.Len() > 0 {
+		t := heap.Pop(&e.queue).(*taskWrap)
+		ok := e.tryAssignTo(t)
+		if ok {
+			e.computeDominantShare(t)
+			if !t.reachLimit() {
+				heap.Push(&e.queue, t)
+			}
+
+			return t.task, nil
+		}
+
+		// Enable binpack policy
+		if !e.binpack {
+			return nil, ErrNoAssignableTask
+		}
 	}
 
-	t := e.queue.Back()
-	ok := e.tryAssignTo(t)
-	if ok {
-		e.computeDominantShare(t)
-		heap.Fix(&e.queue, t.index)
-	} else if !e.binpack {
-		return nil, ErrExhaustionOfResources
-	}
-
-	if t.reachLimit() {
-		heap.Remove(&e.queue, t.index)
-	}
-
-	return t.task, nil
+	return nil, ErrNoAssignableTask
 }
 
 func (e *eDRF) tryAssignTo(t *taskWrap) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	for k := range t.piece {
-		if e.allocated[k]+t.piece[k] >= e.capacity[k] {
+		if e.allocated[k]+t.piece[k] > e.capacity[k] {
 			return false
 		}
 	}
 
 	for k := range t.piece {
 		e.allocated[k] += t.piece[k]
-		t.allocated[k] += t.piece[k]
 	}
+
+	t.incr()
 
 	return true
 }
@@ -175,7 +189,7 @@ func (e *eDRF) tryAssignTo(t *taskWrap) bool {
 func (e *eDRF) computeDominantShare(t *taskWrap) {
 	dshare := t.dshare
 	for resource, allocated := range t.allocated {
-		if amount, ok := e.allocated[resource]; ok && amount > 0 {
+		if amount, ok := e.capacity[resource]; ok && amount > 0 {
 			dsharek := float64(allocated) / float64(amount)
 			if t.weight != nil {
 				dsharek = dsharek / t.weight.Weight(resource)

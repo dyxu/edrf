@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-type fakeCluster struct {
+type cluster struct {
 }
 
-func (c fakeCluster) Capacity() Resources {
+func (c cluster) Capacity() Resources {
 	return Resources{
 		ResourceCPU:    9,
 		ResourceMemory: 18,
@@ -24,7 +24,7 @@ func (taskA) Name() string {
 func (taskA) Piece() Resources {
 	return Resources{
 		ResourceCPU:    1,
-		ResourceMemory: 3,
+		ResourceMemory: 4,
 	}
 }
 
@@ -43,11 +43,8 @@ func (taskB) Piece() Resources {
 }
 
 func TestDRF(t *testing.T) {
-	var tasks []Task = []Task{
-		taskA{},
-		taskB{},
-	}
-	e := New(fakeCluster{}, tasks...)
+	var tasks = []Task{taskA{}, taskB{}}
+	e := New(cluster{}, tasks...)
 	for {
 		task, err := e.Assign()
 		if err != nil {
