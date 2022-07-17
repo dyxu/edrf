@@ -1,15 +1,21 @@
 package edrf
 
 import (
+	"bytes"
 	"container/heap"
 	"errors"
+	"fmt"
 	"sync"
 )
 
 type EDRF interface {
+	// Assign assigns an piece of resource to task
 	Assign() (Task, error)
+	// AddTask adds a task
 	AddTask(t Task) error
+	// RemoveTask removes a task
 	RemoveTask(t Task) error
+	// Describe describes the eDRF detail
 	Describe() string
 }
 
@@ -27,11 +33,11 @@ type BinpackOption interface {
 }
 
 type LimitOption interface {
-	Limit(ResourceType) ResourceAmount
+	Limit(ResourceType) (ResourceAmount, bool)
 }
 
 type WeightOption interface {
-	Weight(ResourceType) float64
+	Weight(ResourceType) (float64, bool)
 }
 
 type ResourceType string
@@ -63,8 +69,8 @@ type taskWrap struct {
 	task      Task
 	piece     Resources
 	allocated Resources
-	limit     LimitOption
-	weight    WeightOption
+	limit     func(ResourceType) (ResourceAmount, bool)
+	weight    func(ResourceType) (float64, bool)
 	dshare    float64
 	index     int
 	mu        sync.Mutex
@@ -79,10 +85,10 @@ func newTaskWrap(task Task) *taskWrap {
 		index:     -1,
 	}
 	if limit, ok := task.(LimitOption); ok {
-		w.limit = limit
+		w.limit = limit.Limit
 	}
 	if weight, ok := task.(WeightOption); ok {
-		w.weight = weight
+		w.weight = weight.Weight
 	}
 
 	return w
@@ -94,7 +100,8 @@ func (t *taskWrap) reachLimit() bool {
 
 	if t.limit != nil {
 		for k, v := range t.allocated {
-			if t.piece[k]+v > t.limit.Limit(k) {
+			limit, ok := t.limit(k)
+			if ok && t.piece[k]+v > limit {
 				return true
 			}
 		}
@@ -192,7 +199,9 @@ func (e *eDRF) computeDominantShare(t *taskWrap) {
 		if amount, ok := e.capacity[resource]; ok && amount > 0 {
 			dsharek := float64(allocated) / float64(amount)
 			if t.weight != nil {
-				dsharek = dsharek / t.weight.Weight(resource)
+				if weight, ok := t.weight(resource); ok {
+					dsharek = dsharek / weight
+				}
 			}
 			if dsharek > dshare {
 				dshare = dsharek
@@ -203,7 +212,16 @@ func (e *eDRF) computeDominantShare(t *taskWrap) {
 }
 
 func (e *eDRF) Describe() string {
-	return ""
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	sb := new(bytes.Buffer)
+
+	fmt.Fprintf(sb, "Cluster: capacity=%v, allocated=%v, binpack=%v\n", e.capacity, e.allocated, e.binpack)
+	for _, tw := range e.tasks {
+		fmt.Fprintf(sb, "%s: piece=%v, allocated=%v\n", tw.task.Name(), tw.piece, tw.allocated)
+	}
+
+	return sb.String()
 }
 
 func (e *eDRF) AddTask(t Task) error {
@@ -216,7 +234,7 @@ func (e *eDRF) AddTask(t Task) error {
 
 	tw := newTaskWrap(t)
 	e.tasks[t.Name()] = tw
-	e.queue.Push(tw)
+	heap.Push(&e.queue, tw)
 
 	return nil
 }
@@ -265,8 +283,4 @@ func (tq *taskQueue) Pop() interface{} {
 	item.index = -1
 	*tq = old[0 : n-1]
 	return item
-}
-
-func (tq taskQueue) Back() *taskWrap {
-	return tq[tq.Len()-1]
 }
