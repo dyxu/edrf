@@ -8,6 +8,7 @@ import (
 	"sync"
 )
 
+// EDRF defines the extended Dominant Resource Fairness interface
 type EDRF interface {
 	// Assign assigns an piece of resource to task
 	Assign() (Task, error)
@@ -19,30 +20,34 @@ type EDRF interface {
 	Describe() string
 }
 
+// Cluster defines a cluster
 type Cluster interface {
 	Capacity() Resources
 }
 
+// Task defines a task
 type Task interface {
 	Name() string
 	Piece() Resources
 }
 
+// BinpackOption defines whether enbale binpack policy or not
 type BinpackOption interface {
 	Binpack() bool
 }
 
+// LimitOption returns the limit resouce of task
 type LimitOption interface {
 	Limit(ResourceType) (ResourceAmount, bool)
 }
 
+// WeightOption returns the weight of task
 type WeightOption interface {
 	Weight(ResourceType) (float64, bool)
 }
 
+// ResourceType defines resource type, e.g. cpu, memory, traffic
 type ResourceType string
-type ResourceAmount int64
-type Resources map[ResourceType]ResourceAmount
 
 const (
 	ResourceCPU     ResourceType = "cpu"
@@ -50,25 +55,20 @@ const (
 	ResourceTraffic ResourceType = "traffic"
 )
 
+type ResourceAmount int64
+type Resources map[ResourceType]ResourceAmount
+
+// ErrorType
 var (
 	ErrNoAssignableTask = errors.New("no assignable task")
 	ErrExistTask        = errors.New("task exists")
 	ErrTaskNotFound     = errors.New("task not found")
 )
 
-func DeepCopyResourcesTo(from Resources) Resources {
-	to := Resources{}
-	for k, v := range from {
-		to[k] = v
-	}
-
-	return to
-}
-
 func (r Resources) DeepCopy() Resources {
 	t := Resources{}
-	for k, v := range t {
-		r[k] = v
+	for k, v := range r {
+		t[k] = v
 	}
 	return t
 }
@@ -82,6 +82,7 @@ func (r *Resources) Add(t Resources) {
 	}
 }
 
+// taskWrap defines a wrap for task
 type taskWrap struct {
 	task      Task
 	piece     Resources
@@ -134,8 +135,6 @@ func (t *taskWrap) incr() {
 	}
 }
 
-type taskQueue []*taskWrap
-
 type eDRF struct {
 	tasks     map[string]*taskWrap
 	queue     taskQueue
@@ -145,6 +144,7 @@ type eDRF struct {
 	mu        sync.Mutex
 }
 
+// New creates an eDRF implement
 func New(cluster Cluster, tasks ...Task) EDRF {
 	e := &eDRF{
 		tasks:     map[string]*taskWrap{},
@@ -162,20 +162,24 @@ func New(cluster Cluster, tasks ...Task) EDRF {
 	for _, t := range tasks {
 		tw := newTaskWrap(t)
 		e.tasks[t.Name()] = tw
-		e.queue.Push(tw)
+		heap.Push(&e.queue, tw)
 	}
-	heap.Init(&e.queue)
 
 	return e
 }
 
+// Assign assigns an piece of resource to task
 func (e *eDRF) Assign() (Task, error) {
 	for e.queue.Len() > 0 {
+		// Pop a task with min dominant share
 		t := heap.Pop(&e.queue).(*taskWrap)
+		// Try assignt to task
 		ok := e.tryAssignTo(t)
 		if ok {
+			// Compute dominat share for task
 			e.computeDominantShare(t)
 			if !t.reachLimit() {
+				// Push if not reach the limit
 				heap.Push(&e.queue, t)
 			}
 
@@ -200,6 +204,9 @@ func (e *eDRF) tryAssignTo(t *taskWrap) bool {
 			return false
 		}
 	}
+	if t.reachLimit() {
+		return false
+	}
 
 	for k := range t.piece {
 		e.allocated[k] += t.piece[k]
@@ -210,6 +217,7 @@ func (e *eDRF) tryAssignTo(t *taskWrap) bool {
 	return true
 }
 
+// computeDominantShare computes dominant share @t
 func (e *eDRF) computeDominantShare(t *taskWrap) {
 	dshare := t.dshare
 	for resource, allocated := range t.allocated {
@@ -274,6 +282,11 @@ func (e *eDRF) RemoveTask(t Task) error {
 	return nil
 }
 
+// taskQueue defines a priority queue
+type taskQueue []*taskWrap
+
+var _ heap.Interface = &taskQueue{}
+
 func (tq taskQueue) Len() int { return len(tq) }
 
 func (tq taskQueue) Less(i, j int) bool {
@@ -300,4 +313,65 @@ func (tq *taskQueue) Pop() interface{} {
 	item.index = -1
 	*tq = old[0 : n-1]
 	return item
+}
+
+type clusterImpl struct {
+	capacity Resources
+	binpack  bool
+}
+
+func NewCluster(capacity Resources, binpack bool) Cluster {
+	return &clusterImpl{
+		capacity: capacity,
+		binpack:  binpack,
+	}
+}
+
+func (c clusterImpl) Capacity() Resources {
+	return c.capacity
+}
+
+func (c clusterImpl) Binpack() bool {
+	return true
+}
+
+type taskImpl struct {
+	name   string
+	piece  Resources
+	limit  Resources
+	weight map[ResourceType]float64
+}
+
+func NewTask(name string, piece, limit Resources, weight map[ResourceType]float64) Task {
+	return &taskImpl{
+		name:   name,
+		piece:  piece,
+		limit:  limit,
+		weight: weight,
+	}
+
+}
+
+func (t taskImpl) Name() string {
+	return t.name
+}
+
+func (t taskImpl) Piece() Resources {
+	return t.piece
+}
+
+func (t taskImpl) Limit(resourceType ResourceType) (ResourceAmount, bool) {
+	if t.limit == nil {
+		return 0, false
+	}
+	limit, ok := t.limit[resourceType]
+	return limit, ok
+}
+
+func (t taskImpl) Weight(resourceType ResourceType) (float64, bool) {
+	if t.weight == nil {
+		return 0.0, false
+	}
+	weight, ok := t.weight[resourceType]
+	return weight, ok
 }
