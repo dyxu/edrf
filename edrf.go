@@ -65,6 +65,23 @@ func DeepCopyResourcesTo(from Resources) Resources {
 	return to
 }
 
+func (r Resources) DeepCopy() Resources {
+	t := Resources{}
+	for k, v := range t {
+		r[k] = v
+	}
+	return t
+}
+
+func (r *Resources) Add(t Resources) {
+	if r == nil {
+		*r = t.DeepCopy()
+	}
+	for k, v := range t {
+		(*r)[k] += v
+	}
+}
+
 type taskWrap struct {
 	task      Task
 	piece     Resources
@@ -79,7 +96,7 @@ type taskWrap struct {
 func newTaskWrap(task Task) *taskWrap {
 	w := &taskWrap{
 		task:      task,
-		piece:     DeepCopyResourcesTo(task.Piece()),
+		piece:     task.Piece().DeepCopy(),
 		allocated: Resources{},
 		dshare:    0.0,
 		index:     -1,
@@ -132,7 +149,7 @@ func New(cluster Cluster, tasks ...Task) EDRF {
 	e := &eDRF{
 		tasks:     map[string]*taskWrap{},
 		queue:     taskQueue{},
-		capacity:  DeepCopyResourcesTo(cluster.Capacity()),
+		capacity:  cluster.Capacity().DeepCopy(),
 		allocated: Resources{},
 		binpack:   false,
 		mu:        sync.Mutex{},
@@ -165,7 +182,7 @@ func (e *eDRF) Assign() (Task, error) {
 			return t.task, nil
 		}
 
-		// Enable binpack policy
+		// Binpack policy
 		if !e.binpack {
 			return nil, ErrNoAssignableTask
 		}
