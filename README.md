@@ -1,3 +1,6 @@
+[![godoc for dyxu/edrf][1]][2]
+[![goreportcard for dyxu/edrf][3]][4]
+
 # eDRF
 eDRF is an extended Dominant Resource Fairness（eDRF） implement in golang, allowing you to assignment with binpack, weight and limit options.
 
@@ -169,3 +172,8 @@ func main() {
     fmt.Print(allocated)
 }
 ```
+
+[1]: https://godoc.org/github.com/dyxu/edrf?status.svg
+[2]: http://godoc.org/github.com/dyxu/edrf
+[3]: https://goreportcard.com/badge/github.com/dyxu/edrf
+[4]: https://goreportcard.com/report/dyxu/edrf
