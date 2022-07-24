@@ -74,9 +74,11 @@ func (r Resources) DeepCopy() Resources {
 }
 
 func (r *Resources) Add(t Resources) {
-	if r == nil {
+	if *r == nil {
 		*r = t.DeepCopy()
+		return
 	}
+
 	for k, v := range t {
 		(*r)[k] += v
 	}

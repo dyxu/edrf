@@ -138,6 +138,7 @@ func TestEDRFWithWeight(t *testing.T) {
 		if err != nil {
 			break
 		}
+
 		assignment[task.Name()]++
 	}
 
@@ -147,5 +148,6 @@ func TestEDRFWithWeight(t *testing.T) {
 	if cnt := assignment["B"]; cnt != 2 {
 		t.Errorf("TaskB: want 2 but got %d", cnt)
 	}
+
 	t.Log(e.Describe())
 }
